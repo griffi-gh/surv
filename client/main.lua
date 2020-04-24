@@ -1,32 +1,41 @@
+--CLIENT
+
 bitser=require'lib.bitser'
 sock=require'lib.sock'
 Camera=require'lib.camera'
 rand=love.math.random
 ni=love.graphics.newImage
+local rng='player'..rand(1000,9999) 
 
 IP='localhost'
+NICKNAME=rng --player1583
 
-world={obj={},version=0}
-me={name='player'..rand(1000,9999),x=100,y=100,texture='player'}
-meRef=nil
+local function sett()
+  world={obj={},version=0}
+  me={name=NICKNAME,x=rand(64)-32,y=rand(64)-32,texture='player'}
+  meRef=nil
+  pl_speed=3
+  players={}
+  serverWver=world.version+1
+end
+sett()
 
-pl_speed=3
-players={}
 textures={
   player=ni('player.png'),
   box=ni('box.jpg'),
   tree_t=ni('tree_top.png'),
   tree_b=ni('tree_bottom.png')
 }
-serverWver=math.huge
 delta=0
 
-function aabb(x1,y1,w1,h1,x2,y2,w2,h2)
-  if x1+w1>x2 and 
-     y1+h1>y2 and 
-     x1<x2+w2 and
-     y1<y2+h2 then 
-       return true 
+function aabb(x1,y1,w1,h1,x2,y2,w2,h2,ext)
+  local vcol,hcol
+  if x1+w1>x2 and x1<x2+w2 then hcol=true end
+  if y1+h1>y2 and y1<y2+h2 then vcol=true end
+  if ext then
+    return hcol,vcol
+  else
+    return (hcol and vcol)
   end
 end
 
@@ -75,7 +84,9 @@ function isOnScreen(x,y,r)
 end
 
 function love.draw()
-  local g=love.graphics g.reset()
+  local g=love.graphics 
+  g.reset()
+  g.setBackgroundColor(0.2,0.25,0.2)
   w,h=g.getWidth(),g.getHeight()
   local function drawIfOnScreen(v,r)
       local sx,sy=1,1
@@ -93,11 +104,13 @@ function love.draw()
     
   if connected then
     camera:attach()
-    camera:follow(me.x,me.y)
+    camera:follow(me.x-8*camera.scale,me.y-8*camera.scale)
+    
     if players and #players>0 then
       for i,v in ipairs(players) do
         if v.name==me.name then
           if tosyncpos then
+            tosyncpos=false
             me.x=v.x
             me.y=v.y
           end
@@ -108,11 +121,22 @@ function love.draw()
         end
       end
     end
+    
+    col=false
     local function objd(v)
       g.setColor(1,1,1)
-      if v.onTouch and aabb(me.x,me.y,32,32,v.x,v.y,v.w,v.h) then pcall(loadstring(v.onTouch)) end
+      if aabb(me.x,me.y,32,32,v.x,v.y,v.w,v.h) then
+        if v.onTouch then 
+          pcall(loadstring(v.onTouch)) 
+        end
+        if v.col then
+          me.x,me.y=prx,pry
+          col=true
+        end
+      end
       drawIfOnScreen(v)
     end
+    
     local queue={}
     if world.obj and #world.obj>0 then
       for i,v in ipairs(world.obj) do
@@ -154,16 +178,16 @@ function love.update(dt)
   spd=dt/(1/60)
   --------------------------------------------
   if connected then
-    local speed=pl_speed
+    prx,pry=me.x,me.y
     local ikd=love.keyboard.isDown
     local u,d,l,r=ikd'up' or ikd'w',ikd'down' or ikd's',ikd'left' or ikd'a',ikd'right' or ikd'd'
     local cx,cy=0,0
     local slow=1
     if (u and l) or (r and u) or (d and r) or (d and l) then slow=2/3 end
-    if u then cy=-spd*speed*slow end
-    if d then cy=spd*speed*slow  end
-    if l then cx=-spd*speed*slow end
-    if r then cx=spd*speed*slow  end
+    if u then cy=-spd*pl_speed*slow  end
+    if d then cy=spd*pl_speed*slow   end
+    if l then cx=-spd*pl_speed*slow  end
+    if r then cx=spd*pl_speed*slow   end
     me.x,me.y=me.x+cx,me.y+cy
   end
   --------------------------------------------
@@ -193,8 +217,9 @@ function love.update(dt)
     end
   else 
     con=false 
-    world.obj={}
-    world.version=0
+    ---world.obj={}
+    ---world.version=0
+    sett()
   end
   --------------------------------------------
   if love.keyboard.isDown'u' then world.version=0 end --update world
@@ -205,24 +230,47 @@ function love.update(dt)
   end --zoom out
 end
 
-function setBlock(d,n)
+function setBlock(d,n,force)
   if not (setWait or worldWait) then
     local n=(n or #world.obj+1)
-    client:send("set",{i=n,v=d})
-    world.obj[n]=d
+    local sd
+    if d==nil then 
+      if not(world.obj[n].nodel) or force then
+        sd=n
+        table.remove(world.obj,n)
+      end
+    else
+      sd={i=n,v=d}
+      world.obj[n]=d
+    end
+    client:send('set',sd)
     setWait=true
   end
 end
 
 function love.mousepressed(x,y,b)
   local wx,wy=camera:toWorldCoords(x,y)
-  if connected then
-    setBlock({x=wx-16,y=wy-16,w=32,h=32,texture='box'})
+  if connected and b==1 then
+    setBlock({x=wx-16,y=wy-16,w=32,h=32,texture='box',col=true})
+  elseif b==2 then
+    local cx,cy=camera:toWorldCoords(love.mouse.getX(),love.mouse.getY())
+    for i,v in ipairs(world.obj) do
+      if aabb(v.x,v.y,v.w,v.h,cx,cy,1,1) then
+        setBlock(nil,i)
+        break
+      end
+    end
   end
 end
 
 function love.keypressed(k)
-  
+  if k=='l' then 
+    if not worldWait or setWait then 
+      client:disconnectNow() 
+      connected=false
+      sett()
+    end 
+  end
 end
 
 function love.quit()
